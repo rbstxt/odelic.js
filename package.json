@@ -1,0 +1,68 @@
+{
+  "name": "odelic",
+  "version": "0.2.0",
+  "description": "Unofficial Node.js library for ODELIC Bluetooth lights (Pairlink connected-mesh)",
+  "type": "module",
+  "license": "MIT",
+  "author": "rbstxt",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rbstxt/odelic.js.git"
+  },
+  "homepage": "https://github.com/rbstxt/odelic.js#readme",
+  "bugs": {
+    "url": "https://github.com/rbstxt/odelic.js/issues"
+  },
+  "keywords": [
+    "odelic",
+    "bluetooth",
+    "ble",
+    "mesh",
+    "lighting",
+    "smart-home",
+    "mcp"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "exports": {
+    ".": "./src/index.js",
+    "./mcp": "./src/mcp.js",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "odelic": "bin/odelic.js",
+    "odelic-mcp": "bin/odelic-mcp.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@stoprocent/noble": "^2.8.0"
+  },
+  "peerDependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.0",
+    "zod": "^3.25.0 || ^4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@modelcontextprotocol/sdk": {
+      "optional": true
+    },
+    "zod": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "zod": "^4.1.12"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
