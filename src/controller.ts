@@ -96,15 +96,42 @@ export class Controller {
       this.cancelIdle();
       try {
         for (let attempt = 0; ; attempt++) {
-          if (!this.mesh.isConnected) await this.mesh.connect();
-          try {
-            return await fn(this.mesh);
-          } catch (e) {
-            // retry once when the BLE link dropped under us; input / login errors are final
-            if (attempt || this.mesh.isConnected || e instanceof InputError || e instanceof LoginError) throw e;
-            log.info(`link lost (${(e as Error).message}), reconnecting`);
-            await this.mesh.disconnect();
+          if (!this.mesh.isConnected) {
+            log.info(`connecting via ${this.mesh.device ?? 'strongest node'}`);
+            await this.mesh.connect();
+          } else if (this.mesh.suspect) {
+            log.info('session looks stale, resynchronising');
+            try {
+              await this.mesh.resync();
+            } catch (e) {
+              log.warning(`resync failed (${(e as Error).message}), reconnecting`);
+              await this.mesh.disconnect();
+              continue;
+            }
           }
+          let res: T;
+          try {
+            res = await fn(this.mesh);
+          } catch (e) {
+            // input / login errors are final; anything else may be a dropped link
+            if (attempt || e instanceof InputError || e instanceof LoginError) throw e;
+            log.warning(`request failed (${(e as Error).message}), reconnecting`);
+            await this.mesh.disconnect();
+            continue;
+          }
+          // status() resolves to null on timeout: the session may have
+          // switched under us (another controller logged in), so make sure
+          // the link is live and retry once
+          if (res === null && !attempt) {
+            log.info('no reply, ensuring the session is live and retrying');
+            try {
+              await this.mesh.ensureLive();
+            } catch (e) {
+              log.warning(`ensureLive failed (${(e as Error).message})`);
+            }
+            continue;
+          }
+          return res;
         }
       } finally {
         this.armIdle();

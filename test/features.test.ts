@@ -95,7 +95,11 @@ class FakeMesh {
   nodeName = 'fake';
   calls: unknown[][] = [];
   connects = 0;
+  resyncs = 0;
+  ensured = 0;
+  suspect = false;
   failNext = false;
+  statusNullOnce = false;
 
   async connect(): Promise<void> {
     this.connects++;
@@ -104,6 +108,15 @@ class FakeMesh {
 
   async disconnect(): Promise<void> {
     this.isConnected = false;
+  }
+
+  async resync(): Promise<void> {
+    this.resyncs++;
+    this.suspect = false;
+  }
+
+  async ensureLive(): Promise<void> {
+    this.ensured++;
   }
 
   private record(name: string, ...args: unknown[]): void {
@@ -123,7 +136,13 @@ class FakeMesh {
   async playScene(i: number) { this.record('playScene', i); }
   async saveScene(i: number) { this.record('saveScene', i); }
   async devices() { return [new P.Device({ vaddr: hex('00000000'), mac: 'AA', product: 76, version: '76.1.0' })]; }
-  async status(v: Buffer) { return new P.LightState({ vaddr: v, on: true, x: 0, y: 0 }); }
+  async status(v: Buffer) {
+    if (this.statusNullOnce) {
+      this.statusNullOnce = false;
+      return null;
+    }
+    return new P.LightState({ vaddr: v, on: true, x: 0, y: 0 });
+  }
 }
 
 test('controller: names, clamping, reconnect, idle disconnect', async () => {
@@ -148,6 +167,29 @@ test('controller: names, clamping, reconnect, idle disconnect', async () => {
 
   await new Promise((r) => setTimeout(r, 120));
   assert.equal(mesh.isConnected, false, 'idle timeout releases the link');
+  await ctl.close();
+});
+
+test('controller: stale session resyncs before the command', async () => {
+  const cfg = new Config({ lights: { living: '00000000' } }, path.join(os.tmpdir(), 'unused.json'));
+  const mesh = new FakeMesh();
+  const ctl = new Controller(null, { config: cfg, mesh: mesh as unknown as OdelicMesh, idleTimeout: 0 });
+  await ctl.on('living'); // connects first
+  mesh.suspect = true;
+  await ctl.on('living');
+  assert.equal(mesh.resyncs, 1);
+  assert.deepEqual(mesh.calls.at(-1), ['on', '00000000']);
+  await ctl.close();
+});
+
+test('controller: status timeout ensures the link is live and retries once', async () => {
+  const cfg = new Config({ lights: { living: '00000000' } }, path.join(os.tmpdir(), 'unused.json'));
+  const mesh = new FakeMesh();
+  const ctl = new Controller(null, { config: cfg, mesh: mesh as unknown as OdelicMesh, idleTimeout: 0 });
+  mesh.statusNullOnce = true;
+  const st = await ctl.status('living');
+  assert.equal(mesh.ensured, 1);
+  assert.deepEqual(st, { name: 'living', online: true, vaddr: '00000000', on: true, color: 0, brightness: 100, x: 0, y: 0 });
   await ctl.close();
 });
 

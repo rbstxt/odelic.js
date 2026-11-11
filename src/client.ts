@@ -161,9 +161,14 @@ export class OdelicMesh {
   private writeChar: Characteristic | null = null;
   private notifyChar: Characteristic | null = null;
   private inbox: Inbox<Buffer> | null = null;
+  private loggingIn = false;
   private seg: Buffer[] = [];
   private segSeq = 0;
   private readonly listeners = new Set<PacketListener>();
+  /** ms timestamp of the last packet we could decrypt (session health signal). */
+  lastRx = 0;
+  /** True when the session may be out of sync with the node. */
+  suspect = false;
 
   /** @param appId ID shown in the app, e.g. "12345678" (or pass `homeid` + `password`) */
   constructor(appId: string | null = null, { homeid, password, device = null, scanTimeout = 8 }: OdelicMeshOptions = {}) {
@@ -197,6 +202,7 @@ export class OdelicMesh {
     this.nodeName = p.advertisement?.localName || p.id;
     this.own = null;
     this.inbox = new Inbox();
+    this.loggingIn = true;
     this.peripheral = p;
     p.on('disconnect', this.onDisconnect);
     try {
@@ -215,7 +221,58 @@ export class OdelicMesh {
       await this.disconnect();
       throw e;
     } finally {
+      this.loggingIn = false;
       this.inbox = null;
+    }
+    this.lastRx = Date.now();
+    this.suspect = false;
+    const vaddrHex = (this.own as Buffer | null)?.toString('hex') ?? '?';
+    log.info(`logged in via ${this.nodeName} (own vaddr ${vaddrHex})`);
+  }
+
+  /**
+   * Re-run the login handshake on the existing link to pick up the node's current session.
+   *
+   * The node answers 08 ("already logged in") but still switches to the new challenge's
+   * session, which we answer too, so commands are understood again afterwards.
+   * A status of 00 means the node forgot us (reboot); wait for the new vaddr then.
+   */
+  async resync(timeout = 8): Promise<void> {
+    if (!this.peripheral || this.peripheral.state !== 'connected') throw new LoginError('not connected');
+    const oldOwn = this.own ? Buffer.from(this.own) : null;
+    const inbox = new Inbox<Buffer>();
+    this.own = null;
+    this.inbox = inbox;
+    this.loggingIn = true;
+    try {
+      await this.write(Buffer.from([0x01, 0x20]));
+      await withTimeout(this.login(inbox, { resync: true, oldOwn }), timeout, 'resync timed out');
+    } catch (e) {
+      if (this.own === null && oldOwn) this.own = oldOwn;
+      throw e;
+    } finally {
+      this.loggingIn = false;
+      if (this.inbox === inbox) this.inbox = null;
+    }
+    this.suspect = false;
+    const vaddrHex = (this.own as Buffer | null)?.toString('hex') ?? '?';
+    log.warning(`session resynchronised with ${this.nodeName} (vaddr ${vaddrHex})`);
+  }
+
+  /** Make sure the link can talk to the node; resync/reconnect when it looks stale. */
+  async ensureLive(timeout = 8): Promise<void> {
+    if (!this.peripheral || this.peripheral.state !== 'connected' || this.own === null) {
+      await this.disconnect();
+      await this.connect();
+      return;
+    }
+    if (this.suspect) {
+      try {
+        await this.resync(timeout);
+      } catch {
+        await this.disconnect();
+        await this.connect();
+      }
     }
   }
 
@@ -224,7 +281,7 @@ export class OdelicMesh {
   }
 
   private readonly onDisconnect = (): void => {
-    log.info('node disconnected');
+    log.warning(`node ${this.nodeName} disconnected`);
     this.own = null;
   };
 
@@ -243,21 +300,33 @@ export class OdelicMesh {
     }
   }
 
-  private async login(inbox: Inbox<Buffer>): Promise<void> {
+  private async login(inbox: Inbox<Buffer>, { resync = false, oldOwn = null }: { resync?: boolean; oldOwn?: Buffer | null } = {}): Promise<void> {
+    let answered = false;
     for (;;) {
       const p = await inbox.next();
       if (p[0] === 0x02 && p[1] === 0x20 && p.length >= 18) {
         await this.write(this.crypto.answerChallenge(p.subarray(2, 18)));
-      } else if (p[0] === 0x02 && p[1] === 0x16) {
-        if (p.length >= 3 && p[2] === 0x08) {
+        answered = true;
+      } else if (p[0] === 0x02 && p[1] === 0x16 && answered) {
+        const status = p.length >= 3 ? p[2] : undefined;
+        if (resync && status === 0x08) {
+          if (this.own === null && oldOwn) this.own = oldOwn; // 08 keeps our login; no new vaddr is sent
+          return;
+        }
+        if (status === 0x08) {
           throw new LoginError('node is already in use by another controller ' +
             '(close the ODELIC app / turn off phone Bluetooth and retry)');
         }
-        if (p.length < 3 || p[2] !== 0) throw new LoginError(`login rejected (status ${p.subarray(2).toString('hex')})`);
+        if (status !== 0) throw new LoginError(`login rejected (status ${p.subarray(2).toString('hex')})`);
+        if (resync) {
+          if (this.own !== null && oldOwn && !this.own.equals(oldOwn)) return; // 00 + fresh vaddr via onNotify
+          continue; // 00: wait for the new 01 0a vaddr assignment
+        }
       } else if (p[0] === 0x01 && p[1] === 0x0a && p.length >= 6) {
         this.own = Buffer.from(p.subarray(2, 6));
       }
-      if (this.own !== null) return;
+      if (!resync && this.own !== null) return;
+      if (resync && this.own !== null && oldOwn && !this.own.equals(oldOwn)) return;
     }
   }
 
@@ -286,13 +355,27 @@ export class OdelicMesh {
       this.seg = [];
       this.segSeq = 0;
     }
+    let plain: Buffer;
     try {
-      data = this.crypto.decrypt(data);
+      plain = this.crypto.decrypt(data);
     } catch {
       log.debug(`undecryptable packet ${data.toString('hex')}`);
+      if (this.own !== null && !this.loggingIn) this.suspect = true; // node encrypts with a session we do not have
       return;
     }
-    this.inbox?.push(data);
+    if (plain !== data && plain[0] === 0x03) this.lastRx = Date.now();
+    data = plain;
+    if (data[0] === 0x01 && data[1] === 0x0a && data.length >= 6) this.own = Buffer.from(data.subarray(2, 6));
+    if (this.loggingIn) {
+      this.inbox?.push(data);
+    } else if (data[0] === 0x02 && data[1] === 0x20 && data.length >= 18 && this.own !== null) {
+      // someone else (another process on this Mac shares the link) started a login:
+      // the node now uses that challenge's session, so follow it
+      if (this.crypto.adoptChallenge(data.subarray(2, 18))) {
+        this.suspect = false;
+        log.warning('another controller started a login on this link; following its session');
+      }
+    }
     for (const cb of [...this.listeners]) {
       try {
         cb(data);

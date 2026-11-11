@@ -75,6 +75,23 @@ export class MeshCrypto {
     return Buffer.concat([Buffer.from([0x01, 0x16, 0x03]), body]);
   }
 
+  /**
+   * Follow a login challenge we did not ask for.
+   *
+   * The node switches to the session value of every new challenge, even when that login is
+   * later refused with status 08. On macOS all processes share one BLE link per peripheral,
+   * so another program logging in through the same link silently invalidates our session
+   * unless we switch too. Returns true if the session changed.
+   */
+  adoptChallenge(challenge: Uint8Array): boolean {
+    const plain = aes128(this.loginKey, Buffer.from(challenge).subarray(0, 16), { decrypt: true });
+    if (!plain.subarray(0, 4).equals(this.homeid)) return false;
+    const next = Buffer.from(plain.subarray(4, 8));
+    const changed = this.session === null || !next.equals(this.session);
+    this.session = next;
+    return changed;
+  }
+
   private xor(data: Buffer, key: Buffer): Buffer {
     return Buffer.from(data.map((b, i) => b ^ key[i % 4]));
   }

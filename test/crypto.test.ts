@@ -47,6 +47,20 @@ test('challenge from another mesh is rejected', () => {
   assert.throws(() => new MeshCrypto(1111, '9999').answerChallenge(hex(CHALLENGE)), LoginError);
 });
 
+test('adoptChallenge follows a foreign login on the shared link', () => {
+  const m = new MeshCrypto(1234, '5678');
+  m.answerChallenge(hex(CHALLENGE));
+  const before = Buffer.from(m.session!);
+  // a second challenge for the same mesh carries a new session: adopt it without answering
+  const changed = m.adoptChallenge(hex('4cfd0d8ba5c948bab1cd0b120171ffdd'));
+  assert.equal(changed, true);
+  assert.ok(!m.session!.equals(before));
+  // adopting the same challenge again changes nothing
+  assert.equal(m.adoptChallenge(hex('4cfd0d8ba5c948bab1cd0b120171ffdd')), false);
+  // a challenge from another mesh is ignored (all-zero decrypts to a wrong HomeID)
+  assert.equal(m.adoptChallenge(hex('00'.repeat(16))), false);
+});
+
 test('light packets match the native library and round-trip', () => {
   const m = new MeshCrypto(1234, '5678');
   assert.throws(() => m.encrypt(P.light(OWN, P.BROADCAST, ...P.XY_OFF)), LoginError);
