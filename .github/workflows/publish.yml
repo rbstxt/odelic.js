@@ -19,7 +19,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          registry-url: https://registry.npmjs.org
+          # no registry-url: setup-node would write a placeholder NODE_AUTH_TOKEN that npm falls back to
       - name: Check tag matches package version
         run: |
           v=$(node -p "require('./package.json').version")
@@ -28,4 +28,4 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
-      - run: npm publish   # prepack builds dist/
+      - run: npm publish --loglevel verbose   # prepack builds dist/; OIDC exchange is logged
