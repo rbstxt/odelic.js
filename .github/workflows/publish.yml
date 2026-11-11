@@ -26,5 +26,6 @@ jobs:
           test "${GITHUB_REF_NAME#v}" = "$v" || { echo "tag $GITHUB_REF_NAME != version $v"; exit 1; }
       - run: npm install -g npm@^11.5.1   # trusted publishing needs npm >= 11.5.1
       - run: npm ci
+      - run: npm run typecheck
       - run: npm test
-      - run: npm publish
+      - run: npm publish   # prepack builds dist/

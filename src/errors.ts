@@ -1,9 +1,9 @@
 /** Error types. `InputError` = bad user input (HTTP 400); the others come from the mesh / BLE side. */
 
 export class OdelicError extends Error {
-  constructor(message, options) {
+  constructor(message?: string, options?: ErrorOptions) {
     super(message, options);
-    this.name = this.constructor.name;
+    this.name = new.target.name;
   }
 }
 

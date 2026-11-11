@@ -13,21 +13,21 @@
  */
 import { createCipheriv, createDecipheriv } from 'node:crypto';
 
-import { InputError, LoginError } from './errors.js';
+import { InputError, LoginError } from './errors.ts';
 
 /** AES-128-ECB without padding; `data` must be a multiple of 16 bytes. */
-export function aes128(key, data, { decrypt = false } = {}) {
-  const c = (decrypt ? createDecipheriv : createCipheriv)('aes-128-ecb', key, null);
+export function aes128(key: Uint8Array, data: Uint8Array, { decrypt = false }: { decrypt?: boolean } = {}): Buffer {
+  const c = decrypt ? createDecipheriv('aes-128-ecb', key, null) : createCipheriv('aes-128-ecb', key, null);
   c.setAutoPadding(false);
   return Buffer.concat([c.update(data), c.final()]);
 }
 
-export function pkcs7Pad(data) {
+export function pkcs7Pad(data: Uint8Array): Buffer {
   const n = 16 - (data.length % 16);
   return Buffer.concat([data, Buffer.alloc(n, n)]);
 }
 
-export function pkcs7Unpad(data) {
+export function pkcs7Unpad(data: Buffer): Buffer {
   const n = data.length ? data[data.length - 1] : 0;
   if (n < 1 || n > 16 || n > data.length || !data.subarray(-n).every((b) => b === n)) {
     throw new InputError('bad padding');
@@ -37,11 +37,15 @@ export function pkcs7Unpad(data) {
 
 /** Keys for one mesh (HomeID + password) and the per-connection session value. */
 export class MeshCrypto {
-  /**
-   * @param {number} homeid
-   * @param {string} password 4 ASCII characters
-   */
-  constructor(homeid, password) {
+  readonly homeid: Buffer;
+  readonly password: Buffer;
+  /** Per-connection value from the login challenge; null until logged in. */
+  session: Buffer | null = null;
+  private readonly loginKey: Buffer;
+  private readonly eventKey: Buffer;
+
+  /** @param password 4 ASCII characters */
+  constructor(homeid: number, password: string) {
     if (!Number.isInteger(homeid) || homeid < 0 || homeid > 0xffffffff) {
       throw new InputError(`HomeID must be a 32-bit unsigned integer (got ${homeid})`);
     }
@@ -56,44 +60,41 @@ export class MeshCrypto {
       mat[2 * i] = this.homeid[i];
       mat[2 * i + 1] = this.password[i];
     }
-    this._loginKey = Buffer.concat([mat, Buffer.from('LOGINKEY')]);
-    this._eventKey = Buffer.concat([mat, Buffer.from('EVENTKEY')]);
-    /** @type {Buffer|null} */
-    this.session = null;
+    this.loginKey = Buffer.concat([mat, Buffer.from('LOGINKEY')]);
+    this.eventKey = Buffer.concat([mat, Buffer.from('EVENTKEY')]);
   }
 
   /** `challenge` = the 16 encrypted bytes following `02 20`. Returns the login packet. */
-  answerChallenge(challenge) {
-    const plain = aes128(this._loginKey, Buffer.from(challenge).subarray(0, 16), { decrypt: true });
+  answerChallenge(challenge: Uint8Array): Buffer {
+    const plain = aes128(this.loginKey, Buffer.from(challenge).subarray(0, 16), { decrypt: true });
     if (!plain.subarray(0, 4).equals(this.homeid)) {
       throw new LoginError(`node belongs to another HomeID (${plain.readUInt32LE(0)})`);
     }
     this.session = Buffer.from(plain.subarray(4, 8));
-    const body = aes128(this._loginKey, pkcs7Pad(Buffer.concat([this.homeid, this.password, this.session])));
+    const body = aes128(this.loginKey, pkcs7Pad(Buffer.concat([this.homeid, this.password, this.session])));
     return Buffer.concat([Buffer.from([0x01, 0x16, 0x03]), body]);
   }
 
-  _xor(data) {
-    const k = this.session;
-    return Buffer.from(data.map((b, i) => b ^ k[i % 4]));
+  private xor(data: Buffer, key: Buffer): Buffer {
+    return Buffer.from(data.map((b, i) => b ^ key[i % 4]));
   }
 
   /** `03 <dst4> <ch> <payload>`  ->  `06 <dst4> <ch> <cipher>` */
-  encrypt(plain) {
-    plain = Buffer.from(plain);
+  encrypt(packet: Uint8Array): Buffer {
+    const plain = Buffer.from(packet);
     if (this.session === null) throw new LoginError('not logged in');
     if (plain.length < 7 || plain[0] !== 0x03) throw new InputError('expected a data-event packet (type 3)');
-    const cipher = aes128(this._eventKey, pkcs7Pad(plain.subarray(6)));
-    return Buffer.concat([Buffer.from([0x06]), plain.subarray(1, 6), this._xor(cipher)]);
+    const cipher = aes128(this.eventKey, pkcs7Pad(plain.subarray(6)));
+    return Buffer.concat([Buffer.from([0x06]), plain.subarray(1, 6), this.xor(cipher, this.session)]);
   }
 
   /** `06 <src/dst4> <ch> <cipher>`  ->  `03 <...> <payload>`; other packet types pass through. */
-  decrypt(packet) {
-    packet = Buffer.from(packet);
+  decrypt(data: Uint8Array): Buffer {
+    const packet = Buffer.from(data);
     if (!packet.length || packet[0] !== 0x06 || this.session === null) return packet;
-    let body = this._xor(packet.subarray(6));
+    let body = this.xor(packet.subarray(6), this.session);
     body = body.subarray(0, body.length - (body.length % 16));
-    const plain = pkcs7Unpad(aes128(this._eventKey, body, { decrypt: true }));
+    const plain = pkcs7Unpad(aes128(this.eventKey, body, { decrypt: true }));
     return Buffer.concat([Buffer.from([0x03]), packet.subarray(1, 6), plain]);
   }
 }

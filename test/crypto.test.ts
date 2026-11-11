@@ -8,11 +8,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import * as P from '../src/protocol.js';
-import { aes128, MeshCrypto, pkcs7Pad, pkcs7Unpad } from '../src/crypto.js';
-import { InputError, LoginError } from '../src/errors.js';
+import * as P from '../src/protocol.ts';
+import { aes128, MeshCrypto, pkcs7Pad, pkcs7Unpad } from '../src/crypto.ts';
+import { InputError, LoginError } from '../src/errors.ts';
 
-const hex = (s) => Buffer.from(s, 'hex');
+const hex = (s: string): Buffer => Buffer.from(s, 'hex');
 const OWN = hex('02000000');
 const CHALLENGE = '10d9e9ae24df368efd29dce10311fcd5';
 
@@ -51,7 +51,7 @@ test('light packets match the native library and round-trip', () => {
   const m = new MeshCrypto(1234, '5678');
   assert.throws(() => m.encrypt(P.light(OWN, P.BROADCAST, ...P.XY_OFF)), LoginError);
   m.answerChallenge(hex(CHALLENGE));
-  const cases = [
+  const cases: [readonly [number, number], string][] = [
     [P.XY_OFF, '06ffffffff2a5f2cc7de934ec8bfa57cd54edc21093a'],
     [[0, 0], '06ffffffff2af540faabb918376c638574d9dcc467f9'], // warm, brightest
   ];

@@ -1,34 +1,39 @@
 /** Offline tests for status parsing, config/names, the controller, the HTTP API and the MCP tool list. */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 
-import * as P from '../src/protocol.js';
-import { Config, parseIdle } from '../src/config.js';
-import { Controller } from '../src/controller.js';
-import { InputError } from '../src/errors.js';
-import { dispatch, HttpError, makeHandler } from '../src/server.js';
-import http from 'node:http';
+import * as P from '../src/protocol.ts';
+import type { OdelicMesh, SetGroupOptions, SetLightOptions } from '../src/client.ts';
+import { Config, parseIdle } from '../src/config.ts';
+import { Controller } from '../src/controller.ts';
+import type { ControllerInfo } from '../src/controller.ts';
+import { InputError } from '../src/errors.ts';
+import { dispatch, HttpError, makeHandler } from '../src/server.ts';
+import type { HttpController } from '../src/server.ts';
 
-const hex = (s) => Buffer.from(s, 'hex');
+const hex = (s: string): Buffer => Buffer.from(s, 'hex');
 
 test('status replies', () => {
   // reply captured from a real light: warm (x=0), brightest (y=0)
   const st = P.parseStatus(hex('03020000002700000000710000000000000000'));
-  assert.deepEqual(st.toJSON(), { vaddr: '00000000', on: true, color: 0, brightness: 100, x: 0, y: 0 });
+  assert.deepEqual(st?.toJSON(), { vaddr: '00000000', on: true, color: 0, brightness: 100, x: 0, y: 0 });
   const off = P.parseStatus(hex('0302000000270000000071323200'));
-  assert.equal(off.on, false);
-  assert.equal(off.brightness, 0);
+  assert.equal(off?.on, false);
+  assert.equal(off?.brightness, 0);
   const on = P.parseStatus(hex('0302000000270000000071373700'));
-  assert.equal(on.on, true);
-  assert.equal(on.color, null);
+  assert.equal(on?.on, true);
+  assert.equal(on?.color, null);
   assert.equal(P.parseStatus(hex('0302000000ff0000')), null);
 });
 
 test('ping replies', () => {
   const d = P.parsePingResponse(hex('03020000' + '00ff' + '665544332211' + '0a000000' + '4c000102'));
+  assert.ok(d);
   assert.equal(d.mac, '11:22:33:44:55:66');
   assert.equal(d.vaddr.toString('hex'), '0a000000');
   assert.equal(d.product, 76);
@@ -84,26 +89,24 @@ test('idle timeout resolution', () => {
   }
 });
 
-/** OdelicMesh stand-in recording the packets the controller would send. */
+/** OdelicMesh stand-in recording what the controller would send. */
 class FakeMesh {
-  constructor() {
-    this.isConnected = false;
-    this.nodeName = 'fake';
-    this.calls = [];
-    this.connects = 0;
-    this.failNext = false;
-  }
+  isConnected = false;
+  nodeName = 'fake';
+  calls: unknown[][] = [];
+  connects = 0;
+  failNext = false;
 
-  async connect() {
+  async connect(): Promise<void> {
     this.connects++;
     this.isConnected = true;
   }
 
-  async disconnect() {
+  async disconnect(): Promise<void> {
     this.isConnected = false;
   }
 
-  record(name, ...args) {
+  private record(name: string, ...args: unknown[]): void {
     if (this.failNext) {
       this.failNext = false;
       this.isConnected = false;
@@ -112,21 +115,21 @@ class FakeMesh {
     this.calls.push([name, ...args]);
   }
 
-  async on(v) { this.record('on', v.toString('hex')); }
-  async off(v) { this.record('off', v.toString('hex')); }
-  async setLight(o) { this.record('setLight', o.color, o.brightness, o.target.toString('hex')); }
-  async nightLight(level, v) { this.record('nightLight', level, v.toString('hex')); }
-  async setGroup(id, o) { this.record('setGroup', id, o); }
-  async playScene(i) { this.record('playScene', i); }
-  async saveScene(i) { this.record('saveScene', i); }
+  async on(v: Buffer) { this.record('on', v.toString('hex')); }
+  async off(v: Buffer) { this.record('off', v.toString('hex')); }
+  async setLight(o: SetLightOptions) { this.record('setLight', o.color, o.brightness, Buffer.from(o.target as Buffer).toString('hex')); }
+  async nightLight(level: number, v: Buffer) { this.record('nightLight', level, v.toString('hex')); }
+  async setGroup(id: number, o: SetGroupOptions) { this.record('setGroup', id, o); }
+  async playScene(i: number) { this.record('playScene', i); }
+  async saveScene(i: number) { this.record('saveScene', i); }
   async devices() { return [new P.Device({ vaddr: hex('00000000'), mac: 'AA', product: 76, version: '76.1.0' })]; }
-  async status(v) { return new P.LightState({ vaddr: v, on: true, x: 0, y: 0 }); }
+  async status(v: Buffer) { return new P.LightState({ vaddr: v, on: true, x: 0, y: 0 }); }
 }
 
 test('controller: names, clamping, reconnect, idle disconnect', async () => {
   const cfg = new Config({ lights: { living: '00000000', hall: '01000000' } }, path.join(os.tmpdir(), 'unused.json'));
   const mesh = new FakeMesh();
-  const ctl = new Controller(null, { config: cfg, mesh, idleTimeout: 0.05 });
+  const ctl = new Controller(null, { config: cfg, mesh: mesh as unknown as OdelicMesh, idleTimeout: 0.05 });
   assert.deepEqual(await ctl.setLight('Living', '0', 500), { ok: true, action: 'light', target: 'living', color: 0, brightness: 100 });
   assert.deepEqual(mesh.calls.at(-1), ['setLight', 0, 100, '00000000']);
   assert.deepEqual(await ctl.off(), { ok: true, action: 'off', target: 'all' });
@@ -148,50 +151,50 @@ test('controller: names, clamping, reconnect, idle disconnect', async () => {
   await ctl.close();
 });
 
-class FakeController {
-  constructor() {
-    this.calls = [];
-    return new Proxy(this, {
-      get: (t, name) => (name in t ? t[name] : async (...args) => {
-        t.calls.push([name, ...args]);
-        return { ok: true, action: name, args };
-      }),
-    });
-  }
+type Call = [string, ...unknown[]];
 
-  info() {
-    return { connected: false, mode: 'idle', idle_timeout: 60 };
-  }
+/** Records every controller call; any method name works. */
+function fakeController(): { ctl: HttpController & Record<string, unknown>; calls: Call[] } {
+  const calls: Call[] = [];
+  const info = (): ControllerInfo => ({ connected: false, node: null, mode: 'idle', idle_timeout: 60 });
+  const ctl = new Proxy({ info } as Record<string, unknown>, {
+    get: (t, name) => (typeof name === 'string' && name in t ? t[name] : async (...args: unknown[]) => {
+      calls.push([String(name), ...args]);
+      return { ok: true, action: String(name), args };
+    }),
+  });
+  return { ctl: ctl as HttpController & Record<string, unknown>, calls };
 }
 
 test('http dispatch', async () => {
-  const c = new FakeController();
-  await dispatch(c, 'POST', '/lights/%E3%83%AA%E3%83%93%E3%83%B3%E3%82%B0/light', { color: 0, brightness: 80 });
-  assert.deepEqual(c.calls.at(-1), ['setLight', 'リビング', 0, 80]);
-  await dispatch(c, 'POST', '/lights/all/off', {});
-  assert.deepEqual(c.calls.at(-1), ['off', 'all']);
-  await dispatch(c, 'POST', '/scenes/2/play', {});
-  assert.deepEqual(c.calls.at(-1), ['scene', 2, false]);
-  await assert.rejects(dispatch(c, 'GET', '/lights/all/on', {}), (e) => e instanceof HttpError && e.status === 405);
-  await assert.rejects(dispatch(c, 'POST', '/nope', {}), (e) => e instanceof HttpError && e.status === 404);
-  await assert.rejects(dispatch(c, 'POST', '/groups/x/on', {}), InputError);
+  const { ctl, calls } = fakeController();
+  await dispatch(ctl, 'POST', '/lights/%E3%83%AA%E3%83%93%E3%83%B3%E3%82%B0/light', { color: 0, brightness: 80 });
+  assert.deepEqual(calls.at(-1), ['setLight', 'リビング', 0, 80]);
+  await dispatch(ctl, 'POST', '/lights/all/off', {});
+  assert.deepEqual(calls.at(-1), ['off', 'all']);
+  await dispatch(ctl, 'POST', '/scenes/2/play', {});
+  assert.deepEqual(calls.at(-1), ['scene', 2, false]);
+  await assert.rejects(dispatch(ctl, 'GET', '/lights/all/on', {}), (e) => e instanceof HttpError && e.status === 405);
+  await assert.rejects(dispatch(ctl, 'POST', '/nope', {}), (e) => e instanceof HttpError && e.status === 404);
+  await assert.rejects(dispatch(ctl, 'POST', '/groups/x/on', {}), InputError);
 });
 
 test('http server with token', async () => {
-  const c = new FakeController();
-  const server = http.createServer(makeHandler(c, 's3cret'));
-  await new Promise((r) => server.listen(0, '127.0.0.1', r));
-  const base = `http://127.0.0.1:${server.address().port}`;
+  const { ctl, calls } = fakeController();
+  const server = http.createServer(makeHandler(ctl, 's3cret'));
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   try {
     const ok = await fetch(`${base}/lights/all/night`, {
       method: 'POST', headers: { Authorization: 'Bearer s3cret' }, body: '{"level": 1}',
     });
     assert.equal(ok.status, 200);
-    assert.deepEqual(c.calls[0], ['nightLight', 'all', 1]);
+    assert.deepEqual(calls[0], ['nightLight', 'all', 1]);
     const denied = await fetch(`${base}/lights/all/off`, { method: 'POST' });
     assert.equal(denied.status, 401);
     const viaQuery = await fetch(`${base}/health?token=s3cret`);
-    assert.deepEqual([viaQuery.status, await viaQuery.json()], [200, { ok: true, connected: false, mode: 'idle', idle_timeout: 60 }]);
+    assert.deepEqual([viaQuery.status, await viaQuery.json()],
+      [200, { ok: true, connected: false, node: null, mode: 'idle', idle_timeout: 60 }]);
     const badJson = await fetch(`${base}/lights/all/off?token=s3cret`, { method: 'POST', body: '{' });
     assert.equal(badJson.status, 400);
   } finally {
@@ -200,19 +203,19 @@ test('http server with token', async () => {
 });
 
 test('mcp tools are registered', async (t) => {
-  let mcp;
-  let Client;
-  let InMemoryTransport;
+  let mcp: typeof import('../src/mcp.ts');
+  let Client: typeof import('@modelcontextprotocol/sdk/client/index.js').Client;
+  let InMemoryTransport: typeof import('@modelcontextprotocol/sdk/inMemory.js').InMemoryTransport;
   try {
-    mcp = await import('../src/mcp.js');
+    mcp = await import('../src/mcp.ts');
     ({ Client } = await import('@modelcontextprotocol/sdk/client/index.js'));
     ({ InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js'));
   } catch {
     t.skip('@modelcontextprotocol/sdk not installed');
     return;
   }
-  const fake = new FakeController();
-  const server = mcp.createMcpServer(() => fake);
+  const { ctl, calls } = fakeController();
+  const server = mcp.createMcpServer(() => ctl as unknown as import('../src/mcp.ts').McpController);
   const client = new Client({ name: 'test', version: '0' });
   const [a, b] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(a), client.connect(b)]);
@@ -224,9 +227,10 @@ test('mcp tools are registered', async (t) => {
       assert.ok(names.has(n), n);
     }
     const res = await client.callTool({ name: 'set_light', arguments: { target: 'living', color: 0 } });
-    assert.deepEqual(fake.calls.at(-1), ['setLight', 'living', 0, 100]);
-    assert.equal(JSON.parse(res.content[0].text).ok, true);
-    assert.match(client.getInstructions(), /ODELIC/);
+    assert.deepEqual(calls.at(-1), ['setLight', 'living', 0, 100]);
+    const content = res.content as { type: string; text: string }[];
+    assert.equal(JSON.parse(content[0].text).ok, true);
+    assert.match(client.getInstructions() ?? '', /ODELIC/);
   } finally {
     await client.close();
     await server.close();

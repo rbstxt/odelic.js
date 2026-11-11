@@ -1,7 +1,7 @@
 {
   "name": "odelic",
   "version": "0.2.0",
-  "description": "Unofficial Node.js library for ODELIC Bluetooth lights (Pairlink connected-mesh)",
+  "description": "Unofficial TypeScript/Node.js library for ODELIC Bluetooth lights (Pairlink connected-mesh)",
   "type": "module",
   "license": "MIT",
   "author": "rbstxt",
@@ -20,14 +20,22 @@
     "mesh",
     "lighting",
     "smart-home",
-    "mcp"
+    "mcp",
+    "typescript"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./src/index.js",
-    "./mcp": "./src/mcp.js",
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp.d.ts",
+      "default": "./dist/mcp.js"
+    },
     "./package.json": "./package.json"
   },
   "bin": {
@@ -36,12 +44,16 @@
   },
   "files": [
     "bin",
+    "dist",
     "src",
     "LICENSE",
     "README.md"
   ],
   "scripts": {
-    "test": "node --test"
+    "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "test": "node --test \"test/*.test.ts\"",
+    "prepack": "npm run build"
   },
   "dependencies": {
     "@stoprocent/noble": "^2.8.0"
@@ -60,6 +72,8 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
+    "@types/node": "^24.19.2",
+    "typescript": "^7.0.2",
     "zod": "^4.1.12"
   },
   "publishConfig": {

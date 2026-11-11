@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [20, 22, 24]
+        node-version: [22, 24]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -19,4 +19,7 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: npm
       - run: npm ci
+      - run: npm run typecheck
       - run: npm test
+      - run: npm run build
+      - run: node bin/odelic.js --version

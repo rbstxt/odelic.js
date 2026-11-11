@@ -4,9 +4,12 @@
  * Mirrors jp.co.odelic.smt.remote03.act.module.ControllerAct in "central" (Tiger) mode:
  *     03 <dst vaddr 4B> <channel> <own vaddr 4B> <msg id> <args...>
  */
-import { InputError } from './errors.js';
+import { InputError } from './errors.ts';
 
-export const BROADCAST = Buffer.from([0xff, 0xff, 0xff, 0xff]);
+/** A light address: 4 bytes, a number (little endian) or a hex string ("00000000", "00:00:00:00"). */
+export type VaddrLike = Uint8Array | number | string;
+
+export const BROADCAST: Buffer = Buffer.from([0xff, 0xff, 0xff, 0xff]);
 
 // channels
 export const CH_TO_LIGHT = 0x20;
@@ -21,30 +24,30 @@ export const MSG_CHANGE_COLOR = 0xe2; //  SM_CHANGE_COLOR (cycle colour preset)
 export const MSG_SCENE_SAVE = 0x40; //    SM_SCENE_IN
 export const MSG_SCENE_PLAY = 0x42; //    SM_SCENE_PLAY
 export const MSG_STATUS = 0x70; //        SM_STATUS
-export const MSG_STATUS_RESPONSES = [0x71, 0x35]; // STATUS_MAIN / STATE_RESPONSE_FD
+export const MSG_STATUS_RESPONSES: readonly number[] = [0x71, 0x35]; // STATUS_MAIN / STATE_RESPONSE_FD
 
 // special (x, y) pairs
-export const XY_ON = [55, 55];
-export const XY_OFF = [50, 50];
+export const XY_ON = [55, 55] as const;
+export const XY_OFF = [50, 50] as const;
 
 export const X_MAX = 20; // colour: 0 = warm (電球色) ... 20 = cool (昼光色)
 export const Y_MAX = 19; // brightness: 0 = brightest ... 19 = dimmest
 
-const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
 /** 0 (warmest) .. 100 (coolest) -> x 0..20 */
-export function colorToX(color) {
+export function colorToX(color: number): number {
   return clamp(Math.round((color * X_MAX) / 100), 0, X_MAX);
 }
 
 /** 1..100 % -> y 19..0 (same rule as the app: (100 - b) / 5, clamped) */
-export function brightnessToY(brightness) {
+export function brightnessToY(brightness: number): number {
   return clamp(Math.floor((100 - brightness) / 5), 0, Y_MAX);
 }
 
-/** 4-byte vaddr from a Buffer/Uint8Array, a number (little endian) or a hex string ("00000000", "00:00:00:00"). */
-export function vaddr(v) {
-  let b;
+/** 4-byte vaddr from a Buffer/Uint8Array, a number (little endian) or a hex string. */
+export function vaddr(v: VaddrLike): Buffer {
+  let b: Buffer;
   if (v instanceof Uint8Array) {
     b = Buffer.from(v);
   } else if (typeof v === 'number') {
@@ -61,9 +64,9 @@ export function vaddr(v) {
 }
 
 /** Concatenate Buffers and byte arrays; like Python's bytes(), array values must be integers 0..255. */
-function bytes(...parts) {
+function bytes(...parts: (Uint8Array | readonly number[])[]): Buffer {
   return Buffer.concat(parts.map((p) => {
-    if (Buffer.isBuffer(p)) return p;
+    if (p instanceof Uint8Array) return p;
     for (const v of p) {
       if (!Number.isInteger(v) || v < 0 || v > 255) throw new InputError(`byte value out of range: ${v}`);
     }
@@ -71,61 +74,84 @@ function bytes(...parts) {
   }));
 }
 
-export function dataEvent(dst, channel, payload) {
+export function dataEvent(dst: Uint8Array, channel: number, payload: Uint8Array): Buffer {
   return bytes([0x03], dst, [channel], payload);
 }
 
 /** ControllerAct.setlight: on/off/colour/brightness for one light or all (broadcast). */
-export function light(own, dst, x, y, index = 0) {
+export function light(own: Uint8Array, dst: Buffer, x: number, y: number, index = 0): Buffer {
   const ch = dst.equals(BROADCAST) ? CH_TO_LIGHT_BROADCAST : CH_TO_LIGHT;
   return dataEvent(dst, ch, bytes(own, [MSG_LIGHT, index, x, y, 0, 0, 0, 0]));
 }
 
 /** ControllerAct.sendgroup_new */
-export function groupLight(own, groupId, x, y) {
+export function groupLight(own: Uint8Array, groupId: number, x: number, y: number): Buffer {
   return dataEvent(BROADCAST, CH_TO_LIGHT, bytes(own, [MSG_LIGHT_GROUP, x, y, 0, 0, 0, 0, 0, 0, groupId]));
 }
 
-export function changeColor(own, dst) {
+export function changeColor(own: Uint8Array, dst: Uint8Array): Buffer {
   return dataEvent(dst, CH_TO_LIGHT, bytes(own, [MSG_CHANGE_COLOR]));
 }
 
-export function scene(own, index, save, dst = BROADCAST) {
+export function scene(own: Uint8Array, index: number, save: boolean, dst: Uint8Array = BROADCAST): Buffer {
   const msg = save ? MSG_SCENE_SAVE : MSG_SCENE_PLAY;
   return dataEvent(dst, CH_TO_LIGHT, bytes(own, [msg, 0, 0, 0, 0, 0, 0, index]));
 }
 
-export function statusRequest(own, dst) {
+export function statusRequest(own: Uint8Array, dst: Uint8Array): Buffer {
   return dataEvent(dst, CH_TO_LIGHT, bytes(own, [MSG_STATUS]));
 }
 
-export function pingAll(own) {
+export function pingAll(own: Uint8Array): Buffer {
   return dataEvent(BROADCAST, CH_PING, own);
 }
 
+/** A light that answered a mesh ping. */
 export class Device {
-  constructor({ vaddr, mac, product, version }) {
+  readonly vaddr: Buffer;
+  readonly mac: string;
+  readonly product: number;
+  readonly version: string;
+
+  constructor({ vaddr, mac, product, version }: { vaddr: Buffer; mac: string; product: number; version: string }) {
     this.vaddr = vaddr;
     this.mac = mac;
     this.product = product;
     this.version = version;
   }
 
-  toString() {
+  toString(): string {
     return `vaddr=${this.vaddr.toString('hex')} mac=${this.mac} product=${this.product} ver=${this.version}`;
   }
 }
 
 /** MeshCommon.GetPingResponse; `p` is a decrypted type-3 packet with channel 0xFF. */
-export function parsePingResponse(p) {
+export function parsePingResponse(p: Buffer): Device | null {
   if (p.length < 20 || p[0] !== 0x03 || p[5] !== CH_PING_RESPONSE) return null;
   const mac = [...p.subarray(6, 12)].reverse().map((b) => b.toString(16).toUpperCase().padStart(2, '0')).join(':');
   const product = p[16] | (p[17] << 8);
   return new Device({ vaddr: Buffer.from(p.subarray(12, 16)), mac, product, version: `${product}.${p[18]}.${p[19]}` });
 }
 
+export interface LightStateJSON {
+  vaddr: string;
+  on: boolean;
+  /** 0 = warm .. 100 = cool, null if unknown */
+  color: number | null;
+  /** 1..100 %, 0 when off, null if unknown */
+  brightness: number | null;
+  x: number;
+  y: number;
+}
+
+/** State reported by one light. */
 export class LightState {
-  constructor({ vaddr, on, x, y }) {
+  readonly vaddr: Buffer;
+  readonly on: boolean;
+  readonly x: number;
+  readonly y: number;
+
+  constructor({ vaddr, on, x, y }: { vaddr: Buffer; on: boolean; x: number; y: number }) {
     this.vaddr = vaddr;
     this.on = on;
     this.x = x;
@@ -133,23 +159,23 @@ export class LightState {
   }
 
   /** 0 = warm .. 100 = cool, null if unknown (light reports a plain "on"). */
-  get color() {
+  get color(): number | null {
     return !this.on || this.x > X_MAX ? null : this.x * 5;
   }
 
   /** 1..100 %, 0 when off, null if unknown. */
-  get brightness() {
+  get brightness(): number | null {
     if (!this.on) return 0;
     return this.y > Y_MAX ? null : 100 - this.y * 5;
   }
 
-  toJSON() {
+  toJSON(): LightStateJSON {
     return { vaddr: this.vaddr.toString('hex'), on: this.on, color: this.color, brightness: this.brightness, x: this.x, y: this.y };
   }
 }
 
 /** Status reply (MeshBlePresenter.syncState): `03 <dst4> <ch> <src4> 71 <x> <y> ...` */
-export function parseStatus(p) {
+export function parseStatus(p: Buffer): LightState | null {
   if (p.length < 13 || p[0] !== 0x03 || !MSG_STATUS_RESPONSES.includes(p[10])) return null;
   const x = p[11];
   const y = p[12];
@@ -157,7 +183,7 @@ export function parseStatus(p) {
 }
 
 /** The app shows "ID:<HomeID><4-char password>", e.g. "ID:12345678" -> { homeid: 1234, password: "5678" }. */
-export function parseAppId(appId) {
+export function parseAppId(appId: string): { homeid: number; password: string } {
   let s = String(appId).trim();
   if (s.toUpperCase().startsWith('ID:')) s = s.slice(3);
   if (s.length < 5) throw new InputError(`ID looks too short: ${JSON.stringify(String(appId))}`);
@@ -170,7 +196,7 @@ export function parseAppId(appId) {
  * HomeID advertised by a mesh node (manufacturer id 0xFFFF, c0/c1 ff 01|02 <homeid LE>).
  * `manufacturerData` is the raw AD field as noble reports it, i.e. starting with the 2-byte company id.
  */
-export function advHomeid(manufacturerData) {
+export function advHomeid(manufacturerData: Buffer | null | undefined): number | null {
   const m = manufacturerData;
   if (!m || m.length < 9 || m[0] !== 0xff || m[1] !== 0xff) return null;
   const v = m.subarray(2);

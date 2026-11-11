@@ -10,41 +10,53 @@
  */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import type { CallToolResult, ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 
-import { Controller } from './controller.js';
-import { VERSION } from './version.js';
+import { Controller } from './controller.ts';
+import { VERSION } from './version.ts';
 
 export const INSTRUCTIONS = `Controls ODELIC Bluetooth ceiling/room lights in the user's home.
 Targets: a light name (see list_lights), or "all" for every light.
 Colour is 0 = warm/電球色 (orange) ... 100 = cool/昼光色 (bluish white); brightness is 1..100 %.
 Commands are fire-and-forget; use light_status to confirm the result if needed.`;
 
-const READ_ONLY = { readOnlyHint: true, idempotentHint: true, openWorldHint: false };
-const ACTION = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false };
-const DESTRUCTIVE = { readOnlyHint: false, destructiveHint: true, openWorldHint: false };
+/** The part of Controller the MCP tools use. */
+export type McpController = Pick<Controller,
+  'lights' | 'status' | 'on' | 'off' | 'setLight' | 'nightLight' | 'group' | 'scene' | 'nameLight' | 'forgetName'>;
+
+const READ_ONLY: ToolAnnotations = { readOnlyHint: true, idempotentHint: true, openWorldHint: false };
+const ACTION: ToolAnnotations = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+const DESTRUCTIVE: ToolAnnotations = { readOnlyHint: false, destructiveHint: true, openWorldHint: false };
 
 const target = z.string().default('all').describe('light name, vaddr, or "all"');
 const color = z.number().int().min(0).max(100).default(50).describe('0 = warm/電球色 .. 50 = neutral .. 100 = cool/昼光色');
 const brightness = z.number().int().min(1).max(100).default(100).describe('1..100 (%)');
+const byte = z.number().int().min(0).max(255);
 
-const result = (value) => ({ content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] });
+const result = (value: unknown): CallToolResult => ({ content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] });
 
 /**
  * Build the MCP server.
- * @param {() => Controller} getController called lazily on the first tool call
+ * @param getController called lazily on the first tool call
  */
-export function createMcpServer(getController = lazyController()) {
+export function createMcpServer(getController: () => McpController = lazyController()): McpServer {
   const server = new McpServer({ name: 'odelic', version: VERSION }, { instructions: INSTRUCTIONS });
   const ctl = () => getController();
-  const tool = (name, description, annotations, inputSchema, fn) =>
-    server.registerTool(name, { description, annotations, inputSchema }, async (args) => {
+
+  function tool<S extends z.ZodRawShape>(name: string, description: string, annotations: ToolAnnotations, inputSchema: S,
+    fn: (args: z.infer<z.ZodObject<S>>) => unknown): void {
+    const handler = async (args: z.infer<z.ZodObject<S>>): Promise<CallToolResult> => {
       try {
         return result(await fn(args));
       } catch (e) {
-        return { ...result({ ok: false, error: `${e.name}: ${e.message}` }), isError: true };
+        const err = e as Error;
+        return { ...result({ ok: false, error: `${err.name}: ${err.message}` }), isError: true };
       }
-    });
+    };
+    // the SDK's registerTool generics do not narrow well through this helper
+    (server.registerTool as (n: string, c: object, h: typeof handler) => unknown)(name, { description, annotations, inputSchema }, handler);
+  }
 
   tool('list_lights', 'List the lights in the mesh (name, vaddr, online, product). Takes a few seconds.',
     READ_ONLY, {}, () => ctl().lights());
@@ -61,12 +73,12 @@ export function createMcpServer(getController = lazyController()) {
   tool('night_light', 'Very dim warm night light. level 0..2.',
     ACTION, { target, level: z.number().int().min(0).max(2).default(0) }, (a) => ctl().nightLight(a.target, a.level));
   tool('control_group', 'Control a group configured in the ODELIC app. action: "on", "off" or "light" (uses color/brightness).',
-    ACTION, { group_id: z.number().int().min(0).max(255), action: z.enum(['on', 'off', 'light']).default('on'), color, brightness },
+    ACTION, { group_id: byte, action: z.enum(['on', 'off', 'light']).default('on'), color, brightness },
     (a) => ctl().group(a.group_id, a.action, a.color, a.brightness));
   tool('play_scene', 'Recall a scene saved in the lights (index as in the app).',
-    ACTION, { index: z.number().int().min(0).max(255) }, (a) => ctl().scene(a.index, false));
+    ACTION, { index: byte }, (a) => ctl().scene(a.index, false));
   tool('save_scene', 'Store the current state of all lights as scene `index` (overwrites that scene).',
-    DESTRUCTIVE, { index: z.number().int().min(0).max(255) }, (a) => ctl().scene(a.index, true));
+    DESTRUCTIVE, { index: byte }, (a) => ctl().scene(a.index, true));
   tool('name_light', 'Give a light (vaddr from list_lights) a friendly name such as "living" or "リビング".',
     { readOnlyHint: false, destructiveHint: false, openWorldHint: false }, { name: z.string().min(1), vaddr: z.string() },
     (a) => ctl().nameLight(a.name, a.vaddr));
@@ -75,15 +87,14 @@ export function createMcpServer(getController = lazyController()) {
   return server;
 }
 
-function lazyController() {
-  let c = null;
+function lazyController(): () => Controller {
+  let c: Controller | null = null;
   // idle timeout from $ODELIC_IDLE_TIMEOUT / config (0 = stay connected)
   return () => (c ??= new Controller());
 }
 
 /** Run the MCP server on stdio (logs go to stderr). */
-export async function main() {
-  const getController = lazyController();
-  const server = createMcpServer(getController);
+export async function main(): Promise<void> {
+  const server = createMcpServer(lazyController());
   await server.connect(new StdioServerTransport());
 }
