@@ -1,72 +1,72 @@
 # odelic.js
 
-An **unofficial** TypeScript / Node.js library for controlling ODELIC Bluetooth lights from a PC. This is the TypeScript port of the Python package [odelic.py](https://github.com/rbstxt/odelic.py), with the same features. Type definitions are included.
+ODELIC（オーデリック）の Bluetooth 照明を PC から操作するための**非公式** TypeScript / Node.js ライブラリです。Python 版 [odelic.py](https://github.com/rbstxt/odelic.py) を TypeScript に移植したもので、機能は同じです。型定義も同梱しています。
 
-It was built by analyzing the communication protocol of the official Android app (`jp.co.odelic.smt.remote10` v1.10.39). It targets devices that use the Pairlink connected-mesh protocol. It does not use the cloud; it controls the lights directly and locally over BLE.
+公式 Android アプリ（`jp.co.odelic.smt.remote10` v1.10.39）の通信方式を解析して作りました。対象はアプリが使っている Pairlink connected-mesh 系の機器です。クラウドは使わず、BLE でローカルに直接操作します。
 
-- The only BLE dependency is [@stoprocent/noble](https://github.com/stoprocent/noble). Encryption (AES-128) uses Node's built-in `crypto`.
-- Tested on macOS. It should also work in any environment noble supports (Linux / Windows).
-- The config file (`~/.config/odelic/config.json`) has the same format as the Python version and can be shared with it.
-- This tool is not endorsed by the manufacturer. Use it at your own risk.
+- BLE 用の依存ライブラリは [@stoprocent/noble](https://github.com/stoprocent/noble) だけです。暗号処理（AES-128）は Node 標準の `crypto` を使っています。
+- macOS で動作を確認しています。noble が対応する環境（Linux / Windows）でも動く想定です。
+- 設定ファイル（`~/.config/odelic/config.json`）は Python 版と同じ形式で、共有できます。
+- メーカー非公認のツールです。利用は自己責任でお願いします。
 
-## Setup
+## セットアップ
 
-Requires Node.js 22 or later.
+Node.js 22 以上が必要です。
 
 ```sh
 npm install odelic
-# To use the MCP server, also install these
+# MCP サーバーを使う場合は、これらも入れてください
 npm install @modelcontextprotocol/sdk zod
 ```
 
-For development (from this repository):
+開発用（このリポジトリから）:
 
 ```sh
 npm install
-npm run typecheck   # tsc over src/ and test/
-npm test            # runs the .ts tests directly (Node's built-in type stripping)
-npm run build       # compiles src/ to dist/ (JS + .d.ts); the CLI in bin/ uses dist/
+npm run typecheck   # src/ と test/ の型チェック
+npm test            # .ts のテストをそのまま実行（Node 標準の型除去機能を使用）
+npm run build       # src/ を dist/ にコンパイル（JS と .d.ts）。bin/ の CLI は dist/ を使います
 ```
 
-### Required information: the app ID
+### 必要な情報：アプリの ID
 
-The app's menu screen shows something like `ID:12345678`. It is **the HomeID followed by the password (the last 4 characters)**. In this example the HomeID is 1234 and the password is `5678`.
+アプリのメニュー画面に `ID:12345678` のような表示があります。これは **HomeID とパスワード（末尾4文字）をつなげたもの**です。この例では HomeID が 1234、パスワードが `5678` になります。
 
 ```sh
-odelic setup --id 12345678        # save it to the config file (permissions 600)
-# or specify it each time with --id / the ODELIC_ID environment variable
+odelic setup --id 12345678        # 設定ファイルに保存（権限 600）
+# または毎回 --id / 環境変数 ODELIC_ID で指定
 ```
 
 ## CLI
 
 ```sh
-odelic scan                                   # find nearby mesh nodes (no login)
-odelic lights                                 # list the lights in the mesh (vaddr / MAC / product code)
-odelic on                                     # turn all on (restores the previous color and brightness)
-odelic off                                    # turn all off
-odelic light --color 0 --brightness 100       # warm (電球色) at full brightness
-odelic light --color 100 --brightness 30      # cool (昼光色) at 30%
-odelic night --level 0                        # night light (0-2)
-odelic status                                 # on/off, color and brightness of every light
-odelic name add リビング 00000000              # give a light a name (vaddr from `lights`)
-odelic off リビング                            # control a single light by name or vaddr
-odelic group 1 on                             # per group (the group ID is set in the app)
-odelic scene save 1 / odelic scene play 1     # save and recall scenes
-odelic -v ...                                 # show sent and received packets
+odelic scan                                   # 近くのメッシュノードを探す（ログインしない）
+odelic lights                                 # メッシュ内の照明一覧（vaddr / MAC / 製品コード）
+odelic on                                     # 全点灯（前回の色・明るさに戻る）
+odelic off                                    # 全消灯
+odelic light --color 0 --brightness 100       # 暖色（電球色）で最大の明るさ
+odelic light --color 100 --brightness 30      # 寒色（昼光色）で 30%
+odelic night --level 0                        # 常夜灯（0〜2）
+odelic status                                 # 全照明の点灯状態・色・明るさ
+odelic name add リビング 00000000              # 照明に名前を付ける（vaddr は lights で確認）
+odelic off リビング                            # 名前か vaddr で1台だけ操作
+odelic group 1 on                             # グループ単位（グループ ID はアプリでの設定）
+odelic scene save 1 / odelic scene play 1     # シーンの保存・呼び出し
+odelic -v ...                                 # 送受信パケットを表示する
 ```
 
-### Auto-disconnect or stay connected
+### 自動切断か常駐か
 
-A mesh node **can connect to only one controller at a time**. To keep the phone app usable, the HTTP API and MCP server drop the BLE connection after 60 seconds of inactivity by default. If you don't use the phone app, you can keep the connection open.
+メッシュノードは**同時に 1 台のコントローラとしか接続できません**。スマホのアプリも使えるように、HTTP API と MCP サーバーは既定で 60 秒操作がなければ BLE 接続を切ります。スマホのアプリを使わないなら、つなぎっぱなしにできます。
 
 ```sh
-odelic setup --keep-connected     # always stay connected
-odelic setup --idle 300           # disconnect after 300 idle seconds
+odelic setup --keep-connected     # 常に接続したままにする
+odelic setup --idle 300           # 300 秒操作がなければ切断
 ```
 
-Priority: command option (`--idle` / `--keep-connected`) → environment variable `ODELIC_IDLE_TIMEOUT` (`0` keeps the connection) → config file → default 60 seconds.
+優先順位：コマンドのオプション（`--idle` / `--keep-connected`）→ 環境変数 `ODELIC_IDLE_TIMEOUT`（`0` で常駐）→ 設定ファイル → 既定値 60 秒
 
-## Using it as a library
+## ライブラリとして使う
 
 ```ts
 import { OdelicMesh } from 'odelic';
@@ -74,7 +74,7 @@ import { OdelicMesh } from 'odelic';
 const mesh = new OdelicMesh(process.env.ODELIC_ID ?? null);
 await mesh.connect();
 try {
-  await mesh.setLight({ color: 0, brightness: 100 }); // 0 = warm .. 100 = cool
+  await mesh.setLight({ color: 0, brightness: 100 }); // 0 = 暖色 .. 100 = 寒色
   for (const d of await mesh.devices()) console.log(String(d));
   console.log((await mesh.status('00000000'))?.toJSON());
   await mesh.off();
@@ -83,66 +83,66 @@ try {
 }
 ```
 
-| Method | Description |
+| メソッド | 内容 |
 |---|---|
-| `on(target)` / `off(target)` | Turn on / off. Omit `target` (vaddr) to target every light |
-| `setLight({color, brightness, target, x, y})` | Set color and brightness. Raw values x (0–20) / y (0–19, 0 is brightest) also work |
-| `nightLight(level, target)` | Night light (the 3 dimmest warm levels) |
-| `setGroup(groupId, {color, brightness, on})` | Per-group control |
-| `changeColor(target)` | Cycle color presets (supported models only) |
-| `saveScene(i)` / `playScene(i)` | Save and recall scenes |
-| `devices()` | List the lights in the mesh via ping |
-| `status(target)` | Query state (`LightState`: `on` / `color` / `brightness`) |
-| `send(packet)` | Encrypt and send any type-3 packet (see `protocol`) |
-| `addListener(cb)` | Receive every incoming packet, decrypted |
+| `on(target)` / `off(target)` | 点灯・消灯。`target`（vaddr）を省略すると全照明が対象 |
+| `setLight({color, brightness, target, x, y})` | 色と明るさの指定。生の値 x (0–20) / y (0–19, 0 が最も明るい) でも指定可 |
+| `nightLight(level, target)` | 常夜灯（暖色の最も暗い 3 段階） |
+| `setGroup(groupId, {color, brightness, on})` | グループ単位の操作 |
+| `changeColor(target)` | 色プリセットの切り替え（対応機種のみ） |
+| `saveScene(i)` / `playScene(i)` | シーンの保存・呼び出し |
+| `devices()` | ping でメッシュ内の照明を列挙 |
+| `status(target)` | 状態の問い合わせ（`LightState`: `on` / `color` / `brightness`） |
+| `send(packet)` | 任意の type-3 パケットを暗号化して送信（`protocol` を参照） |
+| `addListener(cb)` | 受信した全パケットを復号済みで受け取る |
 
-`Controller` is a higher-level class that handles name resolution, auto connect/reconnect, and idle disconnect (used internally by the CLI, HTTP, and MCP).
+名前の解決・自動接続と再接続・アイドル切断までまとめた上位クラス `Controller` もあります（CLI・HTTP・MCP の内部で使用）。
 
 ```ts
 import { Controller, type LightStatus } from 'odelic';
 
-const ctl = new Controller();               // ID from ODELIC_ID / config file
-await ctl.setLight('リビング', 0, 100);      // target, color, brightness
+const ctl = new Controller();               // ID は ODELIC_ID / 設定ファイルから
+await ctl.setLight('リビング', 0, 100);      // 対象, 色, 明るさ
 const states: LightStatus | LightStatus[] = await ctl.status('all');
 await ctl.close();
 ```
 
-Timeouts and the idle duration are all given in **seconds**, matching the Python version and the config file.
+タイムアウトやアイドル時間の単位は、Python 版や設定ファイルに合わせてすべて**秒**です。
 
 ## HTTP API
 
 ```sh
 odelic serve                          # http://127.0.0.1:8765
-odelic serve --keep-connected         # connect at startup and keep the connection
-odelic serve --host 0.0.0.0 --token s3cret   # a token is required to listen beyond localhost
+odelic serve --keep-connected         # 起動時に接続し、つなぎっぱなしにする
+odelic serve --host 0.0.0.0 --token s3cret   # localhost 以外で待ち受けるにはトークンが必須
 ```
 
-| Method | Path | Description |
+| メソッド | パス | 内容 |
 |---|---|---|
-| GET | `/health` | Connection status |
-| GET | `/lights` | List lights |
-| GET | `/lights/<target>` | State (`all` = every light) |
-| POST | `/lights/<target>/on` · `/off` | Turn on / off |
+| GET | `/health` | 接続状態 |
+| GET | `/lights` | 照明一覧 |
+| GET | `/lights/<target>` | 状態（`all` で全照明） |
+| POST | `/lights/<target>/on` · `/off` | 点灯・消灯 |
 | POST | `/lights/<target>/light` | `{"color": 0..100, "brightness": 1..100}` |
 | POST | `/lights/<target>/night` | `{"level": 0..2}` |
-| POST | `/groups/<id>/on` · `/off` · `/light` | Group control |
-| POST | `/scenes/<index>/play` · `/save` | Scenes |
+| POST | `/groups/<id>/on` · `/off` · `/light` | グループ操作 |
+| POST | `/scenes/<index>/play` · `/save` | シーン |
 
-Parameters can be passed as a JSON body or as query parameters. When a token is set, use `Authorization: Bearer <token>` (or `?token=`).
+パラメータは JSON ボディでもクエリパラメータでも渡せます。トークンを設定した場合は `Authorization: Bearer <token>`（または `?token=`）が必要です。
 
 ```sh
 curl -X POST localhost:8765/lights/リビング/light -d '{"color": 0, "brightness": 80}'
 ```
 
-## MCP server (for AI assistants)
+## MCP サーバー（AI アシスタント向け）
 
-This lets Claude and other AI tools control the lights. It requires `@modelcontextprotocol/sdk` and `zod`.
+Claude などの AI から照明を操作できます。`@modelcontextprotocol/sdk` と `zod` が必要です。
 
 ```sh
 claude mcp add odelic -e ODELIC_ID=12345678 -- npx -y -p odelic -p @modelcontextprotocol/sdk -p zod odelic-mcp
 ```
 
-Configuration file example (Claude Desktop, etc.):
+設定ファイルに書く場合（Claude Desktop など）:
 
 ```json
 {
@@ -156,35 +156,35 @@ Configuration file example (Claude Desktop, etc.):
 }
 ```
 
-To run it from a local checkout, run `npm run build` once, then use `"command": "node", "args": ["/path/to/odelic-js/bin/odelic-mcp.js"]`.
+このリポジトリから直接動かす場合は、一度 `npm run build` してから `"command": "node", "args": ["/path/to/odelic-js/bin/odelic-mcp.js"]` を指定してください。
 
-Tools: `list_lights` `light_status` `turn_on` `turn_off` `set_light` `night_light` `control_group` `play_scene` `save_scene` `name_light` `forget_light_name`
+ツール一覧：`list_lights` `light_status` `turn_on` `turn_off` `set_light` `night_light` `control_group` `play_scene` `save_scene` `name_light` `forget_light_name`
 
-## Notes
+## 注意
 
-- If the phone app is connected, you'll get `node is already in use by another controller`. Close the app or turn off Bluetooth on the phone and try again.
-- On macOS, the first run asks for Bluetooth permission for the terminal (or whatever app runs it).
-- **Registering new lights** is not supported. The app registers lights by having the phone broadcast a custom-format signal, and macOS's standard Bluetooth stack cannot broadcast that format. Register lights with the app.
+- スマホのアプリが接続中だと `node is already in use by another controller` になります。アプリを閉じるか、スマホの Bluetooth を切ってから試してください。
+- macOS では初回実行時に、ターミナル（または実行元のアプリ）への Bluetooth 許可を求められます。
+- **新しい照明の登録**には未対応です。アプリはスマホから独自形式の電波を発信して登録していますが、macOS の標準 Bluetooth 機能ではその形式を発信できません。登録はアプリで行ってください。
 
-## Protocol overview
+## プロトコル概要
 
-| Item | Details |
+| 項目 | 内容 |
 |---|---|
-| GATT service | `9e5d1e47-5c13-43a0-8635-82adffc0386f` (write `…ffc1…` / notify `…ffc2…`) |
-| Key | An AES-128 key made of the 8 bytes formed by interleaving the HomeID (4B, little endian) and the password (4B) one byte at a time, followed by `"LOGINKEY"` or `"EVENTKEY"` |
-| Login | Send `01 20` → node returns `02 20 + AES_L(homeid, session4)` → reply with `01 16 03 + AES_L(homeid, pwd, session4)` → `02 16 00` means success (`08` means another device is connected) → `01 0a <own vaddr>` assigns your address |
-| Data | Plaintext `03 <dst4> <ch> <payload>` becomes `06 <dst4> <ch> XOR(AES_E(pkcs7(payload)), session4)` |
-| Light command | `<own vaddr> C0 <index> <x> <y> 00 00 00 00`, ch=0x20 (0x2A when broadcasting to all). x=55,y=55 turns on, 50,50 turns off |
+| GATT サービス | `9e5d1e47-5c13-43a0-8635-82adffc0386f`（書き込み用 `…ffc1…` / 通知用 `…ffc2…`） |
+| 鍵 | HomeID（4B, little endian）とパスワード（4B）を 1 バイトずつ交互に並べた 8B に、`"LOGINKEY"` または `"EVENTKEY"` を連結した AES-128 鍵 |
+| ログイン | `01 20` を送る → ノードが `02 20 + AES_L(homeid, session4)` を返す → `01 16 03 + AES_L(homeid, pwd, session4)` を返す → `02 16 00` が来れば成功（`08` は他の端末が接続中） → `01 0a <own vaddr>` で自分のアドレスが割り当てられる |
+| データ | 平文 `03 <dst4> <ch> <payload>` を `06 <dst4> <ch> XOR(AES_E(pkcs7(payload)), session4)` に変換 |
+| 照明命令 | `<own vaddr> C0 <index> <x> <y> 00 00 00 00`、ch=0x20（全体宛は 0x2A）。x=55,y=55 で点灯、50,50 で消灯 |
 
-The tests use test vectors generated by running the original app's native library in an emulator (the same ones as the Python version; see `tools/native_oracle.py` in odelic.py).
+テストでは、元アプリのネイティブライブラリをエミュレータで動かして作ったテストベクタと照合しています（Python 版と同じもの。odelic.py の `tools/native_oracle.py` を参照）。
 
-## Releasing
+## リリース
 
-Publishing a GitHub release runs `.github/workflows/publish.yml`, which publishes to npm via npm Trusted Publishing (OIDC) — no token needed.
+GitHub でリリースを作ると、`.github/workflows/publish.yml` が npm へ公開します。npm の Trusted Publishing（OIDC）を使うので、トークンは不要です。
 
-1. Bump the version in `package.json` and `src/version.ts`, then push
-2. Create a GitHub release with the tag `v<version>` (e.g. `v0.2.1`)
+1. `package.json` と `src/version.ts` のバージョンを上げてプッシュ
+2. GitHub で `v<バージョン>` タグのリリースを作成（例: `v0.2.1`）
 
-## License
+## ライセンス
 
-MIT License ([LICENSE](LICENSE))
+MIT License（[LICENSE](LICENSE)）
