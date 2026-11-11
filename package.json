@@ -1,6 +1,6 @@
 {
   "name": "odelic",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Unofficial TypeScript/Node.js library for ODELIC Bluetooth lights (Pairlink connected-mesh)",
   "type": "module",
   "license": "MIT",
